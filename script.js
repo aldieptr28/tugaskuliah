@@ -23,6 +23,9 @@ if (document.getElementById('login-form')) {
         } else {
             // Tampilkan pesan error
             loginError.classList.remove('d-none');
+            setTimeout(() => {
+                loginError.classList.add('d-none');
+            }, 3000);
         }
     });
 }
@@ -45,8 +48,10 @@ if (document.getElementById('tasks-table')) {
     const darkModeToggle = document.getElementById('dark-mode-toggle');
     const currentTheme = localStorage.getItem('theme') ? localStorage.getItem('theme') : null;
 
-    if (currentTheme) {
-        document.body.classList.add(currentTheme);
+    // Terapkan tema saat halaman dimuat
+    if (currentTheme === 'dark-mode') {
+        document.body.classList.add('dark-mode');
+        darkModeToggle.innerHTML = '<i class="bi bi-sun-fill"></i>';
     }
 
     darkModeToggle.addEventListener('click', function () {
@@ -54,16 +59,35 @@ if (document.getElementById('tasks-table')) {
         let theme = 'light';
         if (document.body.classList.contains('dark-mode')) {
             theme = 'dark-mode';
+            darkModeToggle.innerHTML = '<i class="bi bi-sun-fill"></i>';
+        } else {
+            darkModeToggle.innerHTML = '<i class="bi bi-moon-fill"></i>';
         }
         localStorage.setItem('theme', theme);
     });
 
     // ==================== Export/Import Data ====================
     const exportBtn = document.getElementById('export-btn');
+    const exportCsvBtn = document.createElement('button');
+    exportCsvBtn.className = 'btn btn-outline-light me-2';
+    exportCsvBtn.id = 'export-csv-btn';
+    exportCsvBtn.innerHTML = '<i class="bi bi-file-earmark-arrow-down-fill"></i> CSV';
+    exportBtn.parentNode.insertBefore(exportCsvBtn, exportBtn.nextSibling);
+
     const importFileInput = document.getElementById('import-file');
+
+    // Tooltip Initialization
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
 
     exportBtn.addEventListener('click', function () {
         const tasks = getTasks();
+        if (tasks.length === 0) {
+            alert('Tidak ada tugas untuk diekspor.');
+            return;
+        }
         const dataStr = JSON.stringify(tasks, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -74,6 +98,42 @@ if (document.getElementById('tasks-table')) {
         URL.revokeObjectURL(url);
     });
 
+    // Export ke CSV
+    exportCsvBtn.addEventListener('click', function () {
+        const tasks = getTasks();
+        if (tasks.length === 0) {
+            alert('Tidak ada tugas untuk diekspor.');
+            return;
+        }
+
+        let csvContent = "data:text/csv;charset=utf-8,";
+        csvContent += "ID,Judul,Deskripsi,Label,Prioritas,Tanggal Jatuh Tempo,Status,File Name,File Type,File Data\n";
+
+        tasks.forEach(task => {
+            const row = [
+                task.id,
+                `"${task.title.replace(/"/g, '""')}"`,
+                `"${task.description ? task.description.replace(/"/g, '""') : ''}"`,
+                task.label,
+                task.priority,
+                task.dueDate,
+                task.status,
+                task.file ? `"${task.file.name.replace(/"/g, '""')}"` : '',
+                task.file ? task.file.type : '',
+                task.file ? task.file.data : ''
+            ].join(',');
+            csvContent += row + "\n";
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement('a');
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "tasks_export_" + new Date().toISOString().slice(0, 10) + ".csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+
     importFileInput.addEventListener('change', function () {
         const file = this.files[0];
         if (!file) return;
@@ -81,7 +141,11 @@ if (document.getElementById('tasks-table')) {
         const reader = new FileReader();
         reader.onload = function (e) {
             try {
-                const importedTasks = JSON.parse(e.target.result);
+                let importedTasks = JSON.parse(e.target.result);
+                if (!Array.isArray(importedTasks)) {
+                    // Coba parse sebagai CSV
+                    importedTasks = parseCSV(e.target.result);
+                }
                 if (Array.isArray(importedTasks)) {
                     saveTasks(importedTasks);
                     displayTasks();
@@ -98,6 +162,30 @@ if (document.getElementById('tasks-table')) {
         this.value = '';
     });
 
+    // Fungsi untuk parsing CSV ke array objek
+    function parseCSV(csv) {
+        const lines = csv.split('\n').filter(line => line.trim() !== '');
+        const headers = lines[0].split(',').map(header => header.trim());
+
+        const tasks = lines.slice(1).map(line => {
+            const values = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+            const task = {};
+            headers.forEach((header, index) => {
+                task[header.replace(/"/g, '')] = values[index] ? values[index].replace(/"/g, '') : '';
+            });
+            // Convert types
+            task.id = parseInt(task.ID);
+            task.file = task['File Data'] ? {
+                name: task['File Name'],
+                type: task['File Type'],
+                data: task['File Data']
+            } : null;
+            return task;
+        });
+
+        return tasks;
+    }
+
     // ==================== Manajemen Tugas ====================
 
     // Ambil elemen-elemen dari DOM
@@ -106,7 +194,7 @@ if (document.getElementById('tasks-table')) {
     const noTasksMsg = document.getElementById('no-tasks');
     const submitBtn = document.getElementById('submit-btn');
     const cancelBtn = document.getElementById('cancel-btn');
-    const formTitle = document.getElementById('form-title');
+    const formTitle = document.getElementById('taskModalLabel');
 
     // Form fields
     const taskIdField = document.getElementById('task-id');
@@ -210,15 +298,32 @@ if (document.getElementById('tasks-table')) {
                 <td>${task.label}</td>
                 <td>${task.priority}</td>
                 <td>${task.dueDate}</td>
-                <td>${task.status}</td>
+                <td>
+                    <span class="badge ${task.status === 'Selesai' ? 'bg-success' : 'bg-warning text-dark'}">
+                        ${task.status}
+                    </span>
+                </td>
                 <td>${displayFile(task.file)}</td>
                 <td>
-                    <button class="btn btn-sm btn-warning me-2" onclick="editTask(${task.id})">Edit</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteTask(${task.id})">Hapus</button>
+                    <button class="btn btn-sm btn-warning me-2" onclick="editTask(${task.id})" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Edit Tugas">
+                        <i class="bi bi-pencil-square"></i>
+                    </button>
+                    <button class="btn btn-sm btn-danger me-2" onclick="deleteTask(${task.id})" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Hapus Tugas">
+                        <i class="bi bi-trash-fill"></i>
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="addToGoogleCalendar(getTaskById(${task.id}))" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Tambahkan ke Kalender">
+                        <i class="bi bi-calendar-plus-fill"></i>
+                    </button>
                 </td>
             `;
 
             tasksTableBody.appendChild(tr);
+        });
+
+        // Initialize tooltips for new elements
+        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
         });
     }
 
@@ -324,6 +429,10 @@ if (document.getElementById('tasks-table')) {
         taskForm.reset();
         filePreview.innerHTML = '';
         cancelEdit();
+        // Hide modal
+        const taskModalEl = document.getElementById('taskModal');
+        const taskModal = bootstrap.Modal.getInstance(taskModalEl);
+        taskModal.hide();
     });
 
     // Fungsi untuk mengedit tugas
@@ -354,7 +463,7 @@ if (document.getElementById('tasks-table')) {
 
         // Ubah tampilan form
         formTitle.textContent = 'Edit Tugas';
-        submitBtn.textContent = 'Perbarui Tugas';
+        submitBtn.innerHTML = '<i class="bi bi-pencil-square"></i> Perbarui Tugas';
         cancelBtn.classList.remove('d-none');
     }
 
@@ -364,12 +473,14 @@ if (document.getElementById('tasks-table')) {
         taskForm.reset();
         filePreview.innerHTML = '';
         formTitle.textContent = 'Tambah Tugas Baru';
-        submitBtn.textContent = 'Tambah Tugas';
+        submitBtn.innerHTML = '<i class="bi bi-plus-circle-fill"></i> Tambah Tugas';
         cancelBtn.classList.add('d-none');
     }
 
     // Event listener untuk tombol batal
-    cancelBtn.addEventListener('click', cancelEdit);
+    cancelBtn.addEventListener('click', function () {
+        cancelEdit();
+    });
 
     // Fungsi untuk menghapus tugas
     function deleteTask(id) {
@@ -398,7 +509,7 @@ if (document.getElementById('tasks-table')) {
             };
             reader.readAsDataURL(file);
         } else {
-            filePreview.innerHTML = `<p>${file.name}</p>`;
+            filePreview.innerHTML = `<a href="${URL.createObjectURL(file)}" download="${file.name}">${file.name}</a>`;
         }
     });
 
@@ -426,6 +537,13 @@ if (document.getElementById('tasks-table')) {
     // Fungsi global untuk mengakses editTask dan deleteTask dari HTML
     window.editTask = editTask;
     window.deleteTask = deleteTask;
+    window.addToGoogleCalendar = addToGoogleCalendar;
+
+    // Fungsi untuk mendapatkan tugas berdasarkan ID
+    function getTaskById(id) {
+        const tasks = getTasks();
+        return tasks.find(task => task.id === id);
+    }
 
     // ==================== Export/Import Data ====================
 
@@ -448,10 +566,12 @@ if (document.getElementById('tasks-table')) {
 
         if (notificationTime > 0) {
             setTimeout(() => {
-                new Notification('Pengingat Tugas', {
-                    body: `Tugas "${task.title}" akan jatuh tempo besok!`,
-                    icon: 'https://i.imgur.com/YourIconLink.png' // Ganti dengan link icon yang sesuai
-                });
+                if (Notification.permission === 'granted') {
+                    new Notification('Pengingat Tugas', {
+                        body: `Tugas "${task.title}" akan jatuh tempo besok!`,
+                        icon: 'https://i.imgur.com/YourIconLink.png' // Ganti dengan link icon yang sesuai
+                    });
+                }
             }, notificationTime);
         }
     }
@@ -465,14 +585,7 @@ if (document.getElementById('tasks-table')) {
         });
     }
 
-    // ==================== Dark Mode ====================
-    // Sudah ditangani sebelumnya
-
     // ==================== Integrasi Kalender ====================
-    // Menggunakan Google Calendar API membutuhkan setup OAuth yang kompleks.
-    // Sebagai alternatif, kita bisa menyediakan link untuk menambahkan tugas ke Google Calendar secara manual.
-
-    // Fungsi untuk mengonversi tugas ke format URL Google Calendar
     function addToGoogleCalendar(task) {
         const baseUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
         const text = encodeURIComponent(task.title);
@@ -488,85 +601,5 @@ if (document.getElementById('tasks-table')) {
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
         return `${year}${month}${day}T000000Z/${year}${month}${day}T235900Z`;
-    }
-
-    // Tambahkan tombol "Tambahkan ke Kalender" di aksi tugas
-    function displayTasks() {
-        let tasks = getTasks();
-        const searchQuery = searchField.value.toLowerCase();
-        const filterLabel = filterLabelField.value;
-        const filterStatus = filterStatusField.value;
-        const sortOption = sortTasksField.value;
-
-        // Filter dan pencarian
-        tasks = tasks.filter(task => {
-            const matchesSearch = task.title.toLowerCase().includes(searchQuery) ||
-                (task.description && task.description.toLowerCase().includes(searchQuery));
-            const matchesLabel = filterLabel ? task.label === filterLabel : true;
-            const matchesStatus = filterStatus ? task.status === filterStatus : true;
-            return matchesSearch && matchesLabel && matchesStatus;
-        });
-
-        // Sortir
-        if (sortOption) {
-            switch (sortOption) {
-                case 'dueDateAsc':
-                    tasks.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
-                    break;
-                case 'dueDateDesc':
-                    tasks.sort((a, b) => new Date(b.dueDate) - new Date(a.dueDate));
-                    break;
-                case 'priorityAsc':
-                    tasks.sort((a, b) => priorityValue(a.priority) - priorityValue(b.priority));
-                    break;
-                case 'priorityDesc':
-                    tasks.sort((a, b) => priorityValue(b.priority) - priorityValue(a.priority));
-                    break;
-                case 'labelAsc':
-                    tasks.sort((a, b) => a.label.localeCompare(b.label));
-                    break;
-                case 'labelDesc':
-                    tasks.sort((a, b) => b.label.localeCompare(a.label));
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        tasksTableBody.innerHTML = '';
-
-        if (tasks.length === 0) {
-            noTasksMsg.style.display = 'block';
-            return;
-        } else {
-            noTasksMsg.style.display = 'none';
-        }
-
-        tasks.forEach((task, index) => {
-            const tr = document.createElement('tr');
-
-            tr.innerHTML = `
-                <td>${index + 1}</td>
-                <td>${task.title}</td>
-                <td>${task.description || '-'}</td>
-                <td>${task.label}</td>
-                <td>${task.priority}</td>
-                <td>${task.dueDate}</td>
-                <td>${task.status}</td>
-                <td>${displayFile(task.file)}</td>
-                <td>
-                    <button class="btn btn-sm btn-warning me-2" onclick="editTask(${task.id})">Edit</button>
-                    <button class="btn btn-sm btn-danger me-2" onclick="deleteTask(${task.id})">Hapus</button>
-                    <button class="btn btn-sm btn-success" onclick="addToGoogleCalendar(getTaskById(${task.id}))">Tambahkan ke Kalender</button>
-                </td>
-            `;
-
-            tasksTableBody.appendChild(tr);
-        });
-    }
-
-    function getTaskById(id) {
-        const tasks = getTasks();
-        return tasks.find(task => task.id === id);
     }
 }
